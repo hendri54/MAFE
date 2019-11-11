@@ -1,0 +1,18 @@
+name = "MAFE"
+uuid = "dfae9f10-ab5a-5991-acc0-ed5e420e57a5"
+authors = ["hendri54 <hendricksl@protonmail.com>"]
+version = "0.1.0"
+
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
+StatFiles = "1463e38c-9381-5320-bcd4-4134955f093a"
+
+[compat]
+julia = "^1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
