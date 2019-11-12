@@ -80,8 +80,18 @@ function spell_years(jh :: SpellHistory)
         for i1 = 1 : ns
             syV[i1] = jh.spellV[i1].startYear;
             eyV[i1] = jh.spellV[i1].endYear;
+            if i1 > 1
+                if syV[i1] < eyV[i1-1]  
+                    @warn "Start year before previous end year"
+                    println("start years: $syV");
+                    println("end years: $eyV");
+                    error("invalid")
+                end
+            end
         end
+        @assert all(eyV .>= syV)  "End years must be > start years"
     end
+
     return syV, eyV
 end
 
@@ -106,8 +116,15 @@ function spell_from_year_range(mh :: SpellHistory, year1 :: T, year2 :: T) where
         idxV = findall((year1 .>= syV)  .&  (year2 .<= eyV));
         if isempty(idxV) 
             return -1
+        elseif length(idxV) > 1
+            if year2 != year1  
+                @warn "Spells of more than 1 year should have unique indices"
+                println("Years: $year1, $year2");
+                println("Indices: $idxV");
+                error("Aborted")
+            end
+            return -1
         else
-            @assert length(idxV) == 1  "idxV: $idxV"
             return idxV[1]
         end
     end

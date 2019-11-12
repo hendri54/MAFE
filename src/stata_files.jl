@@ -43,30 +43,93 @@ end
 """
 	$(SIGNATURES)
 
+Given a file with spells, clean up and sort.
+"""
+function clean_spells(df :: DataFrame)
+    # Ongoing spells. Use future year as end year
+    df.endYear = coalesce.(df.endYear,  2020);
+
+    dropmissing!(df, [:startYear, :endYear],  disallowmissing = true);
+
+    # Types of years are sometimes strange in the Stata files
+    df.startYear = convert(Vector{Int}, df.startYear);
+    df.endYear = convert(Vector{Int}, df.endYear);
+
+    # Fix a typo for Congo
+    df.endYear[df.endYear .== 1695] .= 1965;
+
+    validV = (df.startYear .> 1900)  .&  (df.endYear .< 2050);
+    dfOut = df[findall(validV .== true),  :];
+
+    # Sort by start year of spell (for each ident)
+    sort!(dfOut, [:ident, :startYear, :endYear]);
+    return dfOut
+end
+
+
+"""
+	$(SIGNATURES)
+
+Validate start and end years in a DataFrame
+"""
+function validate_start_end_years(df :: DataFrame)
+    isValid = true;
+    if !all(df.endYear .>= df.startYear)
+        @warn "End years before start years"
+        isValid = false;
+    end
+
+    nRows = size(df, 1);
+    for i1 = 2 : nRows
+        currId = df.ident[i1];
+        if currId == df.ident[i1-1]
+            if df.startYear[i1] < df.endYear[i1-1]
+                @warn "$currId: Start year before previous end year"
+                isValid = false;
+            end                
+            if df.startYear[i1] < df.startYear[i1-1]
+                @warn "$currId: Start years not increasing"
+                isValid = false;
+            end                
+            if df.endYear[i1] < df.endYear[i1-1]
+                @warn "$currId: End years not increasing"
+                isValid = false;
+            end                
+        end
+    end
+
+    return isValid
+end
+
+
+"""
+	$(SIGNATURES)
+
 Read activity file. Rename variables.
 Replace missing end years with interview year.
 Missing startYear should indicate a person without any spells.
 Activity spells are not consecutive.
 """
-function read_activity_file(ctry)
+function read_activity_file(ctry; skipValidation :: Bool = false)
     df = read_stata_file(ctry, "activity");
     rename!(df, :q401d => :startYear, 
         :q401f => :endYear, 
+        :q1a => :birthYear,
         :q408 => :income, 
         :q408_dev => :currency);
 
-    # Ongoing spells. Use current year as end year
-    # q1a is birth year
-    df.endYear = coalesce.(df.endYear,  df.q1a .+ df.age_survey);
+    dfOut = clean_spells(df);
 
-    dropmissing!(df, [:startYear, :endYear, :income, :currency],
-        disallowmissing = true);
+    dropmissing!(dfOut, [:income, :currency],  disallowmissing = true);
 
-    validV = (df.startYear .> 1900)  .&  (df.endYear .< 2050)  .&
-        (df.income .> 0.0);
-    dfOut = df[findall(validV .== true),  :];
+    validV = (dfOut.income .> 0.0);
+    dfOut = dfOut[findall(validV .== true),  :];
+    nRows = size(dfOut, 1);
+    println("No of valid rows: $nRows")
 
-    @assert all(dfOut.endYear .>= dfOut.startYear)
+    if skipValidation
+        @assert validate_start_end_years(dfOut)  "Invalid activity file"
+    end
     
     return dfOut
 end
@@ -78,25 +141,32 @@ end
 Read migration file. Rename variables.
 Replace missing end years with interview year.
 """
-function read_migration_file(ctry)
+function read_migration_file(ctry; skipValidation :: Bool = false)
     df = read_stata_file(ctry, "migration");
     rename!(df, :q601d => :startYear,  
         :q601f => :endYear,  
+        :q1a => :birthYear,
         :q602 => :countryCode,  
         :q606 => :kindOfStay);
 
-    # Ongoing spells. Use current year as end year
-    # q1a is birth year
-    df.endYear = coalesce.(df.endYear,  df.q1a .+ df.age_survey);
+    dropmissing!(df, [:kindOfStay, :countryCode],  disallowmissing = true);
 
-    dropmissing!(df, [:startYear, :endYear, :kindOfStay, :countryCode],
-        disallowmissing = true);
+    dfOut = clean_spells(df);        
 
-    # kindOfStay = 3: more than 1 year
-    validV = (df.startYear .> 1900)  .&  (df.endYear .< 2050);
-    dfOut = df[findall(validV .== true),  :];
+    # Delete <= 1 year spells where kindOfStay != 3 (vactations, transit)
+    # This is a little risky, but needed to avoid stays within longer stays
+    dfOut.duration = dfOut.endYear .- dfOut.startYear;
+    # validV = findall((dfOut.duration .> 1) .| (dfOut.kindOfStay .= 3));
+    dropV = (dfOut.duration .< 2) .& (dfOut.kindOfStay .!= 3);
 
-    @assert all(dfOut.endYear .>= dfOut.startYear)
+    # This person claims to stay in two places at the same time (invalid history)
+    dropV[dfOut.ident .== "N013000"] .= true;
+
+    deleterows!(dfOut, findall(dropV .== true));
+
+    if skipValidation
+        @assert validate_start_end_years(dfOut)  "Invalid migration file"
+    end
 
     return dfOut
 end
@@ -178,20 +248,22 @@ end
 
 Make one person's job history.
 Contains each job with its country. Country is still unknown.
-All persons have at least one spell.
+All persons have at least one spell in the original files, but not in the filtered ones returned by `read_activity_file`.
 """
 function make_job_history(ident :: String, dfAct :: DataFrame)
     # Rows in activity file
     iActV = findall(dfAct.ident .== ident);
 
     nSpells = length(iActV);
-    @assert nSpells >= 1
-
     jobV = Vector{Job}(undef, nSpells);
-    for j = 1 : nSpells
-        iRow = iActV[j];
-        jobV[j] = Job(dfAct.startYear[iRow], dfAct.endYear[iRow],  
-            -1, dfAct.income[iRow]);
+    if nSpells >= 1
+        for j = 1 : nSpells
+            iRow = iActV[j];
+            jobV[j] = Job(dfAct.startYear[iRow], dfAct.endYear[iRow],  
+                -1, dfAct.income[iRow]);
+
+            @assert jobV[j].endYear >= jobV[j].startYear
+        end
     end
     return JobHistory(jobV)
 end

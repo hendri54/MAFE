@@ -21,9 +21,9 @@ using DataFrames
     @test mig1.ctry == 99338
 
     @test find_country(mh, mig1.startYear, mig1.endYear) == mig1.ctry
-    @test find_country(mh, 1940, 1950) == homeCountry
-    @test find_country(mh, 2000, 2005) == homeCountry
-    @test find_country(mh, 1980, 1984) == unknownCountry
+    @test find_country(mh, 1940, 1950) == MAFE.homeCountry
+    @test find_country(mh, 2000, 2005) == MAFE.homeCountry
+    @test find_country(mh, 1980, 1984) == MAFE.unknownCountry
 end
 
 @testset "Job histories" begin
